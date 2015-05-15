@@ -2,6 +2,7 @@
 #define CAFFE_PARALLEL_HPP_
 
 #include <boost/date_time/posix_time/posix_time.hpp>
+#include <boost/thread/barrier.hpp>
 
 #include <vector>
 
@@ -86,7 +87,8 @@ class P2PSync : public GPUParams<Dtype>, public Solver<Dtype>::Callback,
     public InternalThread {
  public:
   explicit P2PSync(shared_ptr<Solver<Dtype> > root_solver,
-                   P2PSync<Dtype>* parent, const SolverParameter& param);
+                   P2PSync<Dtype>* parent, const SolverParameter& param,
+                   boost::barrier* bar);
   virtual ~P2PSync();
 
   inline const shared_ptr<Solver<Dtype> >& solver() const {
@@ -114,6 +116,8 @@ class P2PSync : public GPUParams<Dtype>, public Solver<Dtype>::Callback,
   using Params<Dtype>::size_;
   using Params<Dtype>::data_;
   using Params<Dtype>::diff_;
+
+  boost::barrier* bar_;
 };
 
 }  // namespace caffe

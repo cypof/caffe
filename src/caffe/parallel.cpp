@@ -188,13 +188,15 @@ void DevicePair::compute(const vector<int> devices, vector<DevicePair>* pairs) {
 
 template<typename Dtype>
 P2PSync<Dtype>::P2PSync(shared_ptr<Solver<Dtype> > root_solver,
-                        P2PSync<Dtype>* parent, const SolverParameter& param)
+                        P2PSync<Dtype>* parent, const SolverParameter& param,
+                        boost::barrier* bar)
     : GPUParams<Dtype>(root_solver, param.device_id()),
       parent_(parent),
       children_(),
       queue_(),
       initial_iter_(root_solver->iter()),
-      solver_() {
+      solver_(),
+      bar_(bar) {
 #ifndef CPU_ONLY
   int initial_device;
   CUDA_CHECK(cudaGetDevice(&initial_device));
@@ -260,6 +262,14 @@ void P2PSync<Dtype>::InternalThreadEntry() {
   Caffe::SetDevice(solver_->param().device_id());
   CHECK(Caffe::root_solver());
   Caffe::set_root_solver(false);
+  // See if there is a defined seed and reset random state if so
+  if (solver_->param().random_seed() >= 0) {
+      // Fetch random seed and modulate by device ID to make sure
+      // everyone doesn't have the same seed.  We seem to have some
+      // solver instability if we have everyone with the same seed
+      Caffe::set_random_seed(solver_->param().random_seed() +
+                             solver_->param().device_id());
+  }
   solver_->Step(solver_->param().max_iter() - initial_iter_);
 }
 
@@ -273,7 +283,6 @@ void P2PSync<Dtype>::before_iteration() {
 #else
 //  CHECK(false);
 #endif
-
   // Sum children gradients as they appear in the queue
   for (int i = 0; i < children_.size(); ++i) {
     P2PSync<Dtype> *child = queue_.pop();
@@ -320,7 +329,6 @@ void P2PSync<Dtype>::before_iteration() {
     // for split batch, the root solver divides by number of solvers.
     caffe_gpu_scal(size_, Dtype(1.0 / Caffe::solver_count()), diff_);
   }
-
 #endif
 }
 
@@ -332,6 +340,9 @@ void P2PSync<Dtype>::finish_iteration() {
   CUDA_CHECK(cudaGetDevice(&device));
   CHECK(device == solver_->param().device_id());
 #endif
+
+  // Make sure previous operations have completed
+  bar_->wait();
 
   // Wait for update from parent
   if (parent_) {
@@ -368,6 +379,8 @@ template<typename Dtype>
 void P2PSync<Dtype>::run(shared_ptr<Solver<Dtype> > root,
                          const vector<int>& gpus) {
   // Pair devices for map-reduce synchronization
+    boost::barrier* bar = new boost::barrier(gpus.size());
+    LOG(INFO) << "Syncing: " << gpus.size();
   vector<DevicePair> pairs;
   DevicePair::compute(gpus, &pairs);
   ostringstream s;
@@ -378,7 +391,7 @@ void P2PSync<Dtype>::run(shared_ptr<Solver<Dtype> > root,
 
   SolverParameter param(root->param());
   vector<shared_ptr<P2PSync<Dtype> > > syncs(gpus.size());
-  syncs[0].reset(new P2PSync<Dtype>(root, NULL, param));
+  syncs[0].reset(new P2PSync<Dtype>(root, NULL, param, bar));
 
   // Build the GPU tree by finding the parent for each solver
   for (int attempts = 0; attempts < pairs.size(); ++attempts) {
@@ -395,7 +408,7 @@ void P2PSync<Dtype>::run(shared_ptr<Solver<Dtype> > root,
         }
         if (parent) {
           param.set_device_id(pairs[i].device());
-          syncs[i].reset(new P2PSync<Dtype>(root, parent, param));
+          syncs[i].reset(new P2PSync<Dtype>(root, parent, param, bar));
           parent->children_.push_back((P2PSync<Dtype>*) syncs[i].get());
         }
       }
