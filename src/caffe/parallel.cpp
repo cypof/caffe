@@ -267,6 +267,13 @@ class Worker : public InternalThread {
   virtual ~Worker() {}
 
  protected:
+  SolverAction::Enum CheckForSignals() const {
+    if(rank0_->requested_early_exit()) {
+      return SolverAction::STOP;
+    }
+    return SolverAction::NONE;
+  }
+
   void InternalThreadEntry() {
     // Create solver and install callbacks
     SolverParameter param(rank0_->param());
@@ -279,6 +286,8 @@ class Worker : public InternalThread {
     param.set_type(rank0_->type());
     shared_ptr<Solver<Dtype> > s(SolverRegistry<Dtype>::CreateSolver(param));
     CHECK_EQ(s->type(), rank0_->type());
+    s->SetActionFunction(boost::bind(&Worker::CheckForSignals, this));
+
     if (restore_) {
       // Could not make NCCL broadcast solver state, it seems to crash
       // if called in a tight loop, regardless of barriers etc. so

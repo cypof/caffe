@@ -52,6 +52,8 @@ class Solver {
   // exit training early).
   void SetActionFunction(ActionCallback func);
   SolverAction::Enum GetRequestedAction();
+  bool requested_early_exit() const { return requested_early_exit_; }
+
   // The main entry of the solver function. In default, iter will be zero. Pass
   // in a non-zero iter number to resume training for a pre-trained net.
   virtual void Solve(const char* resume_file = NULL);
